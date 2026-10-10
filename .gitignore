@@ -1,0 +1,9 @@
+@'
+.venv/
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.vscode/
+Thumbs.db
+Desktop.ini
+'@ | Out-File -FilePath .gitignore -Encoding utf8
