@@ -203,8 +203,15 @@ def make_preprocessor(strategy, min_frequency=5):
 
 def build_pipeline(strategy, min_frequency=5, **xgb_params):
     """Return the unfitted pipeline: nominal encoding followed by an XGBoost classifier."""
-    # Named build_ (not make_) so it does not shadow sklearn.pipeline.make_pipeline
+    # Define default model settings
+    model_params = {
+        "enable_categorical": True,
+        "random_state": 42,
+    }
+    # Allow any user-provided parameters to override defaults
+    model_params.update(xgb_params)
+
     return Pipeline([
         ("prep", make_preprocessor(strategy, min_frequency)),
-        ("model", XGBClassifier(enable_categorical=True, random_state=42, **xgb_params)),
+        ("model", XGBClassifier(**model_params)),
     ])
