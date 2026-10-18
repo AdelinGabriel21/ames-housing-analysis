@@ -74,6 +74,17 @@ ORDINAL_MAPS = {
 # Almost every house has the same value here (e.g. 2,927 of 2,930 have "AllPub" utilities)
 NEAR_CONSTANT = ["Utilities", "Street", "Condition 2", "Roof Matl", "Heating", "Pool QC", "Misc Feature"]
 
+# Dropped feature -> kept feature that measures the same thing (Spearman |r| >= 0.8, Exterior 2nd
+# equals Exterior 1st for 85% of the houses); the kept one is the more detailed measurement.
+# 1st Flr SF also follows exactly from Gr Liv Area - 2nd Flr SF - Low Qual Fin SF
+REDUNDANT = {
+    "Garage Yr Blt": "Year Built",
+    "Garage Cars": "Garage Area",
+    "TotRms AbvGrd": "Gr Liv Area",
+    "1st Flr SF": "Total Bsmt SF",
+    "Exterior 2nd": "Exterior 1st",
+}
+
 # Price classes: < 100k, 100k–130k, 130k–180k, 180k–250k, 250k–400k, ≥ 400k
 PRICE_BINS = [0, 100_000, 130_000, 180_000, 250_000, 400_000, np.inf]
 CLASS_NAMES = ["< 100k", "100k–130k", "130k–180k", "180k–250k", "250k–400k", "≥ 400k"]
@@ -116,6 +127,28 @@ def clean(df):
     return df
 
 
+def add_totals(df):
+    """Add the total area, bathroom count and porch area, which a tree cannot sum in one split."""
+    # A house without basement values keeps NaN in Total SF and Total Bathrooms
+    df = df.copy()
+    df["Total SF"] = df["Total Bsmt SF"] + df["Gr Liv Area"]
+    df["Total Bathrooms"] = (
+        df["Full Bath"] + df["Bsmt Full Bath"] + 0.5 * (df["Half Bath"] + df["Bsmt Half Bath"])
+    )
+    porches = ["Wood Deck SF", "Open Porch SF", "Enclosed Porch", "3Ssn Porch", "Screen Porch"]
+    df["Total Porch SF"] = df[porches].sum(axis=1)
+    return df
+
+
+def add_ages(df):
+    """Add the age of the house and of its last remodeling at the time of sale."""
+    # A few partial sales happen before the house or remodeling is finished -> age 0
+    df = df.copy()
+    df["Age At Sale"] = (df["Yr Sold"] - df["Year Built"]).clip(lower=0)
+    df["Years Since Remod"] = (df["Yr Sold"] - df["Year Remod/Add"]).clip(lower=0)
+    return df
+
+
 def encode_ordinal(df):
     """Map the ordinal grades to integers in their natural order (see ORDINAL_MAPS)."""
     # Central Air (Y/N) is not mapped here, it stays a nominal feature
@@ -153,14 +186,21 @@ def split_xy(df):
     return X, y
 
 
-def prepare_data(path, drop_extreme=False, drop_near_constant=False):
+def prepare_data(path, drop_extreme=False, drop_near_constant=False, add_size_totals=False,
+                 add_age_features=False, drop_redundant=False):
     """Run all rule steps on the raw file and return the features X and price classes y."""
     df = clean(load_raw(path))
     if drop_extreme:
         df = df[df["Gr Liv Area"] <= EXTREME_AREA]
+    if add_size_totals:
+        df = add_totals(df)
+    if add_age_features:
+        df = add_ages(df)
     df = to_category(encode_ordinal(df))
     if drop_near_constant:
         df = df.drop(columns=NEAR_CONSTANT)
+    if drop_redundant:
+        df = df.drop(columns=list(REDUNDANT))
     X, y = split_xy(df)
 
     # XGBoost only accepts numeric and category columns (pandas 3 reads text as dtype str)
