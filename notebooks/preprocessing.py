@@ -2,12 +2,15 @@
 
 - Rule steps (load_raw ... prepare_data) are deterministic and work per house, so they run once
   on all houses before any train/test split.
-- Learned steps (make_preprocessor, build_pipeline) fit encoders on data, so they are returned
-  unfitted and are fitted only on the training part inside a scikit-learn Pipeline.
+- Learned steps (make_preprocessor, smote_keep_missing, build_pipeline) fit on data, so they are
+  returned unfitted and are fitted only on the training part inside a Pipeline.
 """
 
 import numpy as np
 import pandas as pd
+from imblearn import FunctionSampler
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline as SamplerPipeline
 from pandas.api.types import is_numeric_dtype
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.model_selection import StratifiedKFold
@@ -241,17 +244,48 @@ def make_preprocessor(strategy, min_frequency=5):
     ).set_output(transform="pandas")
 
 
-def build_pipeline(strategy, min_frequency=5, **xgb_params):
-    """Return the unfitted pipeline: nominal encoding followed by an XGBoost classifier."""
-    # Define default model settings
-    model_params = {
-        "enable_categorical": True,
-        "random_state": 42,
-    }
-    # Allow any user-provided parameters to override defaults
-    model_params.update(xgb_params)
+def smote_keep_missing(X, y, k_neighbors=5, random_state=42):
+    """Add SMOTE houses until every price class is as large as the largest one.
 
-    return Pipeline([
-        ("prep", make_preprocessor(strategy, min_frequency)),
-        ("model", XGBClassifier(**model_params)),
-    ])
+    SMOTE needs complete numeric data: the neighbor search and the interpolation run on a
+    median-filled, standardized copy. The real houses are returned unchanged (XGBoost keeps
+    handling their missing values), only the synthetic houses carry filled-in values.
+    """
+    filled = X.fillna(X.median())
+    mean, std = filled.mean(), filled.std().replace(0, 1)
+    X_res, y_res = SMOTE(k_neighbors=k_neighbors, random_state=random_state).fit_resample((filled - mean) / std, y)
+
+    # fit_resample returns the real houses first, then the synthetic ones
+    synthetic = X_res.iloc[len(X):] * std + mean
+    # Interpolation gives values like 0.4 for a one-hot column or 3.6 for a quality grade
+    integer_cols = [col for col in X if (X[col].dropna() % 1 == 0).all()]
+    synthetic[integer_cols] = synthetic[integer_cols].round()
+    return (
+        pd.concat([X, synthetic], ignore_index=True),
+        pd.concat([pd.Series(y), pd.Series(y_res).iloc[len(X):]], ignore_index=True),
+    )
+
+
+def build_pipeline(strategy, min_frequency=5, smote=False, model=None, **xgb_params):
+    """Return the unfitted pipeline: nominal encoding (+ SMOTE) followed by a classifier.
+
+    The classifier is XGBoost with xgb_params, unless another unfitted model is passed (e.g. LightGBM).
+    """
+    if model is None:
+        # Define default model settings
+        model_params = {
+            "enable_categorical": True,
+            "random_state": 42,
+        }
+        # Allow any user-provided parameters to override defaults
+        model_params.update(xgb_params)
+        model = XGBClassifier(**model_params)
+    elif xgb_params:
+        raise ValueError(f"XGBoost parameters given together with another model: {sorted(xgb_params)}")
+
+    prep = ("prep", make_preprocessor(strategy, min_frequency))
+    model = ("model", model)
+    if not smote:
+        return Pipeline([prep, model])
+    # The imbalanced-learn pipeline runs the sampler only in fit, so test houses are never resampled
+    return SamplerPipeline([prep, ("smote", FunctionSampler(func=smote_keep_missing, validate=False)), model])

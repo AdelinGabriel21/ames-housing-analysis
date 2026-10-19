@@ -6,6 +6,7 @@
 - Every result table has one row per split or fold, which makes them easy to stack and compare.
 """
 
+import numpy as np
 import pandas as pd
 from sklearn.base import clone
 from sklearn.metrics import accuracy_score, f1_score
@@ -46,16 +47,21 @@ def make_splits(y, holdout_seeds=HOLDOUT_SEEDS, cv_seed=CV_SEED):
     return splits
 
 
-def evaluate(pipeline, X, y, splits, extra_train=None):
-    """Fit a fresh copy of the pipeline on every split and return its train and test scores."""
+def evaluate(pipeline, X, y, splits, extra_train=None, weight_fn=None):
+    """Fit a fresh copy of the pipeline on every split and return its train and test scores.
+
+    weight_fn, if given, maps the training price classes to one weight per house (e.g. class weights).
+    """
     rows = []
     for split in splits:
         # Houses in extra_train are only ever used for training, never scored as test houses
         train = split["train"] if extra_train is None else [*split["train"], *extra_train]
         test = split["test"]
-        model = clone(pipeline).fit(X.loc[train], y.loc[train])
+        fit_params = {} if weight_fn is None else {"model__sample_weight": weight_fn(y.loc[train])}
+        model = clone(pipeline).fit(X.loc[train], y.loc[train], **fit_params)
 
-        train_pred, test_pred = model.predict(X.loc[train]), model.predict(X.loc[test])
+        # ravel: CatBoost returns the predicted classes as a column (n, 1) instead of (n,)
+        train_pred, test_pred = np.ravel(model.predict(X.loc[train])), np.ravel(model.predict(X.loc[test]))
         rows.append({
             "Setup": split["Setup"],
             "Split": split["Split"],
