@@ -4,6 +4,9 @@
   on all houses before any train/test split.
 - Learned steps (make_preprocessor, make_scaler, smote_keep_missing, build_pipeline) fit on data,
   so they are returned unfitted and are fitted only on the training part inside a Pipeline.
+- Complete-data steps (drop_incomplete, fill_missing) serve methods that cannot handle empty cells.
+  Their medians come from all the houses passed in, so they are meant for work without a
+  train/test split.
 """
 
 import numpy as np
@@ -294,3 +297,24 @@ def build_pipeline(strategy, min_frequency=5, smote=False, model=None, **xgb_par
         return Pipeline([prep, model])
     # The imbalanced-learn pipeline runs the sampler only in fit, so test houses are never resampled
     return SamplerPipeline([prep, ("smote", FunctionSampler(func=smote_keep_missing, validate=False)), model])
+
+
+# ---------------------------------------------------------------------------------------------
+# Complete-data steps: for methods that cannot handle empty cells, without a train/test split
+# ---------------------------------------------------------------------------------------------
+
+def drop_incomplete(X, y, max_gaps=5):
+    """Drop the houses with max_gaps or more empty cells, where whole blocks of values are unknown."""
+    keep = X.isna().sum(axis=1) < max_gaps
+    return X[keep], y[keep]
+
+
+def fill_missing(X):
+    """Fill every empty cell: Garage Yr Blt from Year Built, all others from medians."""
+    # The medians come from all the houses passed in, so a test part would leak into them
+    X = X.copy()
+    X["Garage Yr Blt"] = X["Garage Yr Blt"].fillna(X["Year Built"])
+    # A neighborhood without any known frontage has no median here and gets the plain one below
+    neighborhood_median = X.groupby("Neighborhood", observed=True)["Lot Frontage"].transform("median")
+    X["Lot Frontage"] = X["Lot Frontage"].fillna(neighborhood_median)
+    return X.fillna(X.median(numeric_only=True))
