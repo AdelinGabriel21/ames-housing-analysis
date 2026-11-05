@@ -2,8 +2,8 @@
 
 - Rule steps (load_raw ... prepare_data) are deterministic and work per house, so they run once
   on all houses before any train/test split.
-- Learned steps (make_preprocessor, smote_keep_missing, build_pipeline) fit on data, so they are
-  returned unfitted and are fitted only on the training part inside a Pipeline.
+- Learned steps (make_preprocessor, make_scaler, smote_keep_missing, build_pipeline) fit on data,
+  so they are returned unfitted and are fitted only on the training part inside a Pipeline.
 """
 
 import numpy as np
@@ -15,7 +15,7 @@ from pandas.api.types import is_numeric_dtype
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, TargetEncoder
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, OrdinalEncoder, TargetEncoder
 from xgboost import XGBClassifier
 
 TARGET = "SalePrice"
@@ -242,6 +242,11 @@ def make_preprocessor(strategy, min_frequency=5):
         remainder="passthrough",
         verbose_feature_names_out=False,
     ).set_output(transform="pandas")
+
+
+def make_scaler():
+    """Return the unfitted min-max scaling step, which maps every column to the range 0–1."""
+    return MinMaxScaler().set_output(transform="pandas")
 
 
 def smote_keep_missing(X, y, k_neighbors=5, random_state=42):
