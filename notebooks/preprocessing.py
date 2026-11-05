@@ -1,9 +1,10 @@
 """Data preparation for the Ames Housing price-class model (Lab 2).
 
-- Rule steps (load_raw ... prepare_data) are deterministic and work per house, so they run once
-  on all houses before any train/test split.
-- Learned steps (make_preprocessor, make_scaler, smote_keep_missing, build_pipeline) fit on data,
-  so they are returned unfitted and are fitted only on the training part inside a Pipeline.
+- Rule steps (load_raw ... prepare_data, log_features) are deterministic and work per house, so
+  they run once on all houses before any train/test split.
+- Learned steps (make_preprocessor, make_scaler, make_zscore_scaler, smote_keep_missing,
+  build_pipeline) fit on data, so they are returned unfitted and are fitted only on the training
+  part inside a Pipeline.
 - Complete-data steps (drop_incomplete, fill_missing) serve methods that cannot handle empty cells.
   Their medians come from all the houses passed in, so they are meant for work without a
   train/test split.
@@ -18,7 +19,7 @@ from pandas.api.types import is_numeric_dtype
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, OrdinalEncoder, TargetEncoder
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, OrdinalEncoder, StandardScaler, TargetEncoder
 from xgboost import XGBClassifier
 
 TARGET = "SalePrice"
@@ -90,6 +91,9 @@ REDUNDANT = {
     "1st Flr SF": "Total Bsmt SF",
     "Exterior 2nd": "Exterior 1st",
 }
+
+# Continuous areas that are strongly right-skewed and whose skew a logarithm at least halves
+LOG_FEATURES = ["Lot Area", "Gr Liv Area", "1st Flr SF", "Open Porch SF"]
 
 # Price classes: < 100k, 100k–130k, 130k–180k, 180k–250k, 250k–400k, ≥ 400k
 PRICE_BINS = [0, 100_000, 130_000, 180_000, 250_000, 400_000, np.inf]
@@ -215,6 +219,13 @@ def prepare_data(path, drop_extreme=False, drop_near_constant=False, add_size_to
     return X, y
 
 
+def log_features(X, columns=LOG_FEATURES):
+    """Return a copy of X with log(1 + x) in the given columns, which keeps zero areas at 0."""
+    X = X.copy()
+    X[columns] = np.log1p(X[columns])
+    return X
+
+
 # ---------------------------------------------------------------------------------------------
 # Learned steps: returned unfitted, fitted on the training part only
 # ---------------------------------------------------------------------------------------------
@@ -250,6 +261,16 @@ def make_preprocessor(strategy, min_frequency=5):
 def make_scaler():
     """Return the unfitted min-max scaling step, which maps every column to the range 0–1."""
     return MinMaxScaler().set_output(transform="pandas")
+
+
+def make_zscore_scaler(columns):
+    """Return the unfitted z-score step, which gives the columns mean 0 and standard deviation 1."""
+    # All other columns pass through unchanged, but they move behind the scaled ones
+    return ColumnTransformer(
+        [("zscore", StandardScaler(), list(columns))],
+        remainder="passthrough",
+        verbose_feature_names_out=False,
+    ).set_output(transform="pandas")
 
 
 def smote_keep_missing(X, y, k_neighbors=5, random_state=42):
